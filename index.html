@@ -1,0 +1,1995 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+<!-- ========================================================================
+     Four-in-a-Row  —  a self-contained, offline Connect Four clone.
+
+     Everything (markup, styles, logic, icons) lives in this single .html
+     file with no third-party dependencies, so the page can be saved and
+     shared as one document and will run fully offline.
+
+     Design notes for developers:
+       * State is a plain 6x7 grid of 0 (empty) / 1 (red) / 2 (yellow).
+       * The board is drawn as two stacked layers: a "tokens" grid behind a
+         blue "face" whose circular holes let the discs show through. A disc
+         is animated from above the top edge so it appears to fall into a hole.
+       * Two input paths land a disc in a column: drag a token from a player's
+         pile, or tap the subtle chevron above a column.
+       * The computer opponent has three strengths (see makeAiMove / negamax).
+       * Only UI preferences persist (localStorage); the board itself does not.
+     ===================================================================== -->
+
+<title>Four-in-a-Row</title>
+<meta name="description" content="Four-in-a-Row — a free, offline Connect Four game. Play against the computer or a friend, with drag-and-drop discs and three difficulty levels.">
+
+<!-- Open Graph / Twitter metadata for link previews. The preview image is a
+     separate PNG generated from the favicon artwork. -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Four-in-a-Row">
+<meta property="og:description" content="A free, offline Connect Four game. Play the computer or a friend — drag a disc or tap a column to drop.">
+<meta property="og:image" content="four-in-a-row-og-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Four-in-a-Row">
+<meta name="twitter:description" content="A free, offline Connect Four game. Play the computer or a friend.">
+<meta name="twitter:image" content="four-in-a-row-og-preview.png">
+<meta name="theme-color" content="#1e6fd6">
+
+<!-- Favicon: a tiny Connect-Four board with a red and yellow disc, inlined as
+     an SVG data URI so no extra file is needed. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231e6fd6'/%3E%3Ccircle cx='22' cy='22' r='11' fill='%23e4453a'/%3E%3Ccircle cx='42' cy='22' r='11' fill='%23111a2b'/%3E%3Ccircle cx='22' cy='42' r='11' fill='%23111a2b'/%3E%3Ccircle cx='42' cy='42' r='11' fill='%23f4c531'/%3E%3C/svg%3E">
+
+<style>
+/* ---------------------------------------------------------------------------
+   Theme tokens. Colors follow the browser's light/dark preference; the board
+   blue and disc colors stay constant across themes for brand consistency.
+--------------------------------------------------------------------------- */
+:root {
+  --bg: #eef1f5;
+  --fg: #1b1e24;
+  --muted: #5c6470;
+  --panel: #ffffff;
+  --panel-border: #d5dae2;
+  --panel-shadow: rgba(20, 30, 50, 0.12);
+  --accent: #1e6fd6;
+  --board: #1e6fd6;
+  --board-edge: #1858ab;
+  --hole-shadow: rgba(0, 0, 0, 0.28);
+  --red: #e4453a;
+  --red-hi: #ff6b60;
+  --red-edge: #b12f26;
+  --yellow: #f4c531;
+  --yellow-hi: #ffe07a;
+  --yellow-edge: #cc9a11;
+  --focus: #1e6fd6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161b;
+    --fg: #e8eaef;
+    --muted: #99a1af;
+    --panel: #21252e;
+    --panel-border: #333a46;
+    --panel-shadow: rgba(0, 0, 0, 0.5);
+    --accent: #4d92f0;
+    --board: #1c62bd;
+    --board-edge: #12447f;
+    --hole-shadow: rgba(0, 0, 0, 0.55);
+    --focus: #6aa8ff;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Header holds the turn/result status and the gear button on one row. */
+header {
+  width: 100%;
+  max-width: 640px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* Status takes the remaining space and centers its content, so the turn text
+   sits on the gear's row. The gear stays pinned at the right. */
+header .status { flex: 1; margin: 0; }
+header #settings-toggle { flex: none; }
+
+/* Gear button. */
+#settings-toggle {
+  appearance: none;
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  color: var(--fg);
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px var(--panel-shadow);
+}
+#settings-toggle:active { transform: translateY(1px); }
+#settings-toggle svg { width: 24px; height: 24px; }
+#settings-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+#lang-select {
+  font-size: 15px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  color: var(--fg);
+  cursor: pointer;
+  width: 100%;
+}
+
+/* ---- Settings sidebar (slide-in drawer) -------------------------------- */
+#settings-backdrop {
+  position: fixed;
+  inset: 0;
+  /* Transparent so the board stays fully visible while adjusting colors; the
+     backdrop still catches clicks to close the sidebar. */
+  background: transparent;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s, visibility 0.2s;
+  z-index: 60;
+}
+#settings-backdrop.open { opacity: 1; visibility: visible; }
+
+#settings-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100dvh;
+  width: min(360px, 88vw);
+  background: var(--panel);
+  border-left: 1px solid var(--panel-border);
+  box-shadow: -6px 0 24px var(--panel-shadow);
+  z-index: 61;
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#settings-panel.open { transform: translateX(0); }
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--panel-border);
+  flex: none;
+}
+.settings-header h2 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+}
+#settings-close {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 26px;
+  line-height: 1;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+#settings-close:hover { background: var(--bg); color: var(--fg); }
+#settings-close:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.settings-body {
+  padding: 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  flex: 1;
+}
+
+/* A labeled block within the sidebar. */
+.setting {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.setting > .label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  font-weight: 700;
+}
+#difficulty-setting[hidden] { display: none; }
+
+main {
+  width: 100%;
+  max-width: 640px;
+  padding: 8px 16px 24px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.dot-red { color: var(--red); }
+.dot-yellow { color: var(--yellow); }
+
+/* Segmented control shared style for mode + difficulty pickers. Full width so
+   it fills the sidebar. */
+.segment {
+  display: flex;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.segment button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+  padding: 10px 12px;
+  cursor: pointer;
+  flex: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.segment button + button { border-left: 1px solid var(--panel-border); }
+.segment button[aria-pressed="true"] {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* Color settings: a row of swatch pickers. */
+.color-row {
+  display: flex;
+  gap: 10px;
+}
+.swatch {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  text-align: center;
+}
+.swatch input[type="color"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: none;
+  cursor: pointer;
+}
+.swatch input[type="color"]::-webkit-color-swatch-wrapper { padding: 4px; }
+.swatch input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
+.swatch input[type="color"]::-moz-color-swatch { border: none; border-radius: 6px; }
+.swatch input[type="color"]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Swap buttons sit between the color pickers to exchange two adjacent colors.
+   Aligned to the top so they line up with the color inputs, not the labels. */
+.swap-btn {
+  flex: none;
+  align-self: flex-start;
+  width: 34px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--fg);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.05s;
+}
+.swap-btn:hover { background: var(--bg); }
+.swap-btn:active { transform: translateY(1px); }
+.swap-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Color schemes: clickable preset tiles, each previewing the two player colors
+   over the board color. Click one to apply all three at once. */
+.scheme-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.scheme-swatch {
+  appearance: none;
+  border: 2px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 0;
+  height: 42px;
+  cursor: pointer;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: border-color 0.15s, transform 0.05s;
+}
+.scheme-swatch:active { transform: translateY(1px); }
+.scheme-swatch[aria-pressed="true"] { border-color: var(--accent); }
+.scheme-swatch:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.scheme-swatch .disc {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+#new-game {
+  appearance: none;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  font-size: 15px;
+  padding: 12px 18px;
+  cursor: pointer;
+  width: 100%;
+  box-shadow: 0 2px 6px var(--panel-shadow);
+}
+#new-game:active { transform: translateY(1px); }
+
+/* Undo: a secondary (outlined) button sitting above New Game. Disabled and
+   dimmed when there is no move to take back (or while a move is animating). */
+#undo-btn {
+  appearance: none;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-weight: 600;
+  font-size: 15px;
+  padding: 12px 18px;
+  cursor: pointer;
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+#undo-btn svg { width: 18px; height: 18px; }
+#undo-btn:active:not(:disabled) { transform: translateY(1px); }
+#undo-btn:disabled { opacity: 0.45; cursor: default; }
+#undo-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* Credit block lives at the bottom of the sidebar. */
+.credit {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--panel-border);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.credit a { color: var(--accent); }
+.credit .version { opacity: 0.8; }
+
+/* ---- Status line ------------------------------------------------------- */
+.status {
+  min-height: 28px;
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  text-align: center;
+}
+.status .chip {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,0.15);
+}
+.status .chip.red { background: var(--red); }
+.status .chip.yellow { background: var(--yellow); }
+
+/* "New Game" button shown alongside the result text once a game ends. */
+.play-again {
+  appearance: none;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  font-size: 15px;
+  padding: 8px 16px;
+  cursor: pointer;
+  box-shadow: 0 2px 6px var(--panel-shadow);
+}
+.play-again:active { transform: translateY(1px); }
+.play-again[hidden] { display: none; }
+.play-again:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* ---- Play area: pile | board | pile ------------------------------------ */
+.play-area {
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: clamp(6px, 2.5vw, 18px);
+}
+
+/* A pile is a small heap of a player's discs at the bottom corners. The
+   active player's pile is lifted and highlighted; discs can be dragged from
+   it. Discs are stacked with slight jitter for a "loose pile" look. */
+.pile {
+  width: clamp(46px, 13vw, 74px);
+  height: clamp(70px, 20vw, 110px);
+  position: relative;
+  flex: none;
+  border-radius: 12px;
+  transition: transform 0.2s, filter 0.2s;
+}
+.pile.active {
+  transform: translateY(-4px);
+}
+.pile.active::after {
+  content: "";
+  position: absolute;
+  inset: -6px -4px -10px;
+  border-radius: 14px;
+  border: 2px dashed var(--accent);
+  opacity: 0.6;
+  pointer-events: none;
+}
+.pile.drag-ready { cursor: grab; }
+.pile .pile-disc {
+  position: absolute;
+  width: clamp(34px, 10vw, 54px);
+  height: clamp(34px, 10vw, 54px);
+  border-radius: 50%;
+  left: 50%;
+  touch-action: none;
+}
+.pile-label {
+  position: absolute;
+  bottom: -22px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* Disc visuals (shared by pile discs, board discs and the drag ghost). The
+   base / highlight / edge colors are CSS variables so the player color settings
+   can recolor every disc live without re-rendering. */
+.disc-red {
+  background: radial-gradient(circle at 34% 30%, var(--red-hi), var(--red) 62%);
+  box-shadow: inset 0 0 0 2px var(--red-edge), inset -3px -4px 8px rgba(0,0,0,0.25);
+}
+.disc-yellow {
+  background: radial-gradient(circle at 34% 30%, var(--yellow-hi), var(--yellow) 62%);
+  box-shadow: inset 0 0 0 2px var(--yellow-edge), inset -3px -4px 8px rgba(0,0,0,0.22);
+}
+
+.board-wrap {
+  position: relative;
+  width: min(78vw, 460px);
+  flex: none;
+  /* Reserve space at the top for the chevron drop-buttons so they sit above the
+     board within this box rather than overflowing upward into the status text. */
+  padding-top: 36px;
+}
+
+/* Row of subtle chevron buttons above each column for quick "tap to drop".
+   Occupies the reserved padding strip at the top of the board wrapper. */
+.drop-buttons {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 36px;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+.drop-buttons button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  opacity: 0.35;
+  transition: opacity 0.15s, transform 0.15s, color 0.15s;
+  padding: 0;
+}
+.board-wrap:not(.locked) .drop-buttons button:hover,
+.drop-buttons button.hint {
+  opacity: 1;
+  color: var(--accent);
+  transform: translateY(2px);
+}
+.drop-buttons button:disabled { cursor: default; opacity: 0.12; }
+.drop-buttons button:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+.drop-buttons svg { width: 60%; height: 60%; }
+
+/* The board itself: a fixed 7:6 aspect box containing two stacked grids. */
+.board {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 7 / 6;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* Behind layer: the discs, laid out in the same 7x6 grid as the holes. */
+.tokens-layer {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-template-rows: repeat(6, 1fr);
+  z-index: 1;
+}
+.tokens-layer .disc {
+  width: 82%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  justify-self: center;
+  align-self: center;
+  will-change: transform;
+}
+.tokens-layer .disc.win {
+  animation: winpulse 0.7s ease-in-out infinite alternate;
+}
+@keyframes winpulse {
+  from { box-shadow: inset 0 0 0 2px #fff, 0 0 0 0 rgba(255,255,255,0.0); }
+  to   { box-shadow: inset 0 0 0 3px #fff, 0 0 10px 3px rgba(255,255,255,0.55); }
+}
+.tokens-layer .disc.seat { animation: seat 0.18s ease-out; }
+@keyframes seat {
+  0% { transform: scaleY(0.9) scaleX(1.06); }
+  100% { transform: none; }
+}
+
+/* Front layer: the blue board face. Each cell is blue with a transparent
+   circular hole (radial gradient) so the disc behind peeks through. The face
+   ignores pointer events so drags are tracked over the whole board. */
+.board-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-template-rows: repeat(6, 1fr);
+  z-index: 2;
+  pointer-events: none;
+  /* No solid background here: the blue comes from the hole cells themselves so
+     each hole's transparent center reveals the disc in the layer behind. */
+  box-shadow: inset 0 0 0 3px var(--board-edge);
+}
+.board-face .hole {
+  position: relative;
+  background:
+    radial-gradient(circle at center,
+      rgba(0,0,0,0) 0 38%,
+      var(--hole-shadow) 38% 40%,
+      var(--board) 42%);
+}
+/* Column highlight shown while dragging over / hovering a column. */
+.board-face .hole.col-hint::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, rgba(255,255,255,0.16) 0 38%, transparent 40%);
+}
+
+/* The floating disc that follows the pointer during a drag. */
+#drag-ghost {
+  position: fixed;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 50;
+  transform: translate(-50%, -50%);
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tokens-layer .disc.win { animation: none; box-shadow: inset 0 0 0 3px #fff; }
+  .tokens-layer .disc.seat { animation: none; }
+}
+
+/* Narrow screens: shrink the board and piles so the pile | board | pile row
+   fits within the viewport without clipping the corner piles. */
+@media (max-width: 480px) {
+  .board-wrap { width: min(66vw, 460px); }
+  .pile { width: clamp(40px, 13vw, 74px); }
+  .pile .pile-disc { width: clamp(30px, 10vw, 54px); height: clamp(30px, 10vw, 54px); }
+  .play-area { gap: 5px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <!-- The turn / result status sits on the same row as the gear button. -->
+  <div class="status" id="status" aria-live="polite"></div>
+
+  <!-- Gear button opens the Settings sidebar. -->
+  <button id="settings-toggle" aria-label="Settings" aria-haspopup="dialog" aria-expanded="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  </button>
+</header>
+
+<main>
+  <!-- Shown only when a game ends; moved next to the result text on the header
+       row by endGame(). Lives here (hidden) until then. -->
+  <button id="play-again" class="play-again" data-i18n="newGame" hidden>New Game</button>
+
+  <div class="play-area">
+    <!-- Player 1 pile, bottom-left. -->
+    <div class="pile" id="pile-left" data-player="1">
+      <span class="pile-label" id="pile-left-label"></span>
+    </div>
+
+    <div class="board-wrap" id="board-wrap">
+      <div class="drop-buttons" id="drop-buttons"></div>
+      <div class="board" id="board">
+        <div class="tokens-layer" id="tokens-layer"></div>
+        <div class="board-face" id="board-face"></div>
+      </div>
+    </div>
+
+    <!-- Player 2 pile, bottom-right. -->
+    <div class="pile" id="pile-right" data-player="2">
+      <span class="pile-label" id="pile-right-label"></span>
+    </div>
+  </div>
+</main>
+
+<div id="drag-ghost" aria-hidden="true"></div>
+
+<!-- ===== Settings sidebar ================================================= -->
+<div id="settings-backdrop"></div>
+<aside id="settings-panel" role="dialog" aria-modal="true" aria-label="Settings" aria-hidden="true">
+  <div class="settings-header">
+    <h2 class="settings-title" data-i18n="title">Four-in-a-Row</h2>
+    <button id="settings-close" aria-label="Close settings">&times;</button>
+  </div>
+
+  <div class="settings-body">
+    <!-- Bare language dropdown (no visible label per design). Only English is
+         populated for now; the full language list is added later. -->
+    <div class="setting">
+      <select id="lang-select" aria-label="Language"></select>
+    </div>
+
+    <div class="setting">
+      <span class="label" data-i18n="players">Players</span>
+      <div class="segment" id="mode-seg" role="group" aria-label="Number of players">
+        <button data-mode="1p" aria-pressed="true" data-i18n="onePlayer">1 Player</button>
+        <button data-mode="2p" aria-pressed="false" data-i18n="twoPlayer">2 Players</button>
+      </div>
+    </div>
+
+    <div class="setting" id="difficulty-setting">
+      <span class="label" data-i18n="difficulty">Difficulty</span>
+      <div class="segment" id="diff-seg" role="group" aria-label="Difficulty">
+        <button data-diff="easy" aria-pressed="true" data-i18n="easy">Easy</button>
+        <button data-diff="medium" aria-pressed="false" data-i18n="medium">Medium</button>
+        <button data-diff="hard" aria-pressed="false" data-i18n="hard">Hard</button>
+      </div>
+    </div>
+
+    <div class="setting">
+      <span class="label" data-i18n="goesFirst">Goes First</span>
+      <div class="segment" id="first-seg" role="group" aria-label="Goes first">
+        <button data-first="red" aria-pressed="true">Player 1</button>
+        <button data-first="yellow" aria-pressed="false">Player 2</button>
+      </div>
+    </div>
+
+    <div class="setting">
+      <span class="label" data-i18n="schemes">Color schemes</span>
+      <div class="scheme-row" id="scheme-row" role="group" aria-label="Color schemes"></div>
+    </div>
+
+    <div class="setting">
+      <span class="label" data-i18n="colors">Colors</span>
+      <div class="color-row" id="color-row">
+        <label class="swatch">
+          <input type="color" id="color-p1">
+          <span data-i18n="player1">Player 1</span>
+        </label>
+        <button type="button" class="swap-btn" data-swap="p1-p2"
+                aria-label="Swap Player 1 and Player 2 colors">🔄</button>
+        <label class="swatch">
+          <input type="color" id="color-p2">
+          <span data-i18n="player2">Player 2</span>
+        </label>
+        <button type="button" class="swap-btn" data-swap="p2-board"
+                aria-label="Swap Player 2 and Board colors">🔄</button>
+        <label class="swatch">
+          <input type="color" id="color-board">
+          <span data-i18n="board">Board</span>
+        </label>
+      </div>
+    </div>
+
+    <button id="undo-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M9 14L4 9l5-5"/>
+        <path d="M4 9h11a5 5 0 0 1 0 10h-1"/>
+      </svg>
+      <span data-i18n="undo">Undo</span>
+    </button>
+
+    <button id="new-game" data-i18n="newGame">New Game</button>
+
+    <div class="credit">
+      <span data-i18n="credit">Generated and human-reviewed by <a href="https://inventwithpython.com">Al Sweigart</a>. This app works offline and you own it forever. Just right-click and save the .html page.</span>
+      <span class="version" id="version"></span>
+    </div>
+  </div>
+</aside>
+
+<script>
+"use strict";
+
+/* =========================================================================
+   Configuration & constants
+   ====================================================================== */
+
+const VERSION = "0.1.0";          // single source of truth for the version string
+const COLS = 7;
+const ROWS = 6;
+const EMPTY = 0, RED = 1, YELLOW = 2;   // cell / player values
+const STORAGE_KEY = "fourinarow.settings.v1";
+
+/* -------------------------------------------------------------------------
+   Internationalization scaffold.
+
+   Only English is provided for now. The dropdown intentionally starts with a
+   single option; more languages (with flag emoji) are added later. UI text is
+   applied to elements carrying a data-i18n key.
+------------------------------------------------------------------------- */
+const LANGUAGES = [
+  { code: "en", flag: "🇬🇧", name: "English" },
+  // Future languages will be appended here.
+];
+
+const STRINGS = {
+  en: {
+    title: "Four-in-a-Row",
+    players: "Players",
+    onePlayer: "1 Player",
+    twoPlayer: "2 Players",
+    difficulty: "Difficulty",
+    easy: "Easy",
+    medium: "Medium",
+    hard: "Hard",
+    newGame: "New Game",
+    undo: "Undo",
+    settings: "Settings",
+    colors: "Colors",
+    goesFirst: "Goes First",
+    schemes: "Color schemes",
+    board: "Board",
+    credit: null, // rendered statically in markup (contains a link)
+
+    // Pile labels
+    you: "You",
+    computer: "Computer",
+    player1: "Player 1",
+    player2: "Player 2",
+
+    // Status messages
+    yourTurn: "Your turn",
+    computerThinking: "Computer is thinking…",
+    player1Turn: "Player 1's turn",
+    player2Turn: "Player 2's turn",
+    youWin: "You win! 🎉",
+    computerWins: "Computer wins",
+    player1Wins: "Player 1 wins! 🎉",
+    player2Wins: "Player 2 wins! 🎉",
+    draw: "It's a draw!",
+
+    dropInColumn: "Drop in column",
+  },
+};
+
+/* Return a translated string for the current language, falling back to
+   English if a key is missing in the active language. */
+function t(key) {
+  const lang = state.lang;
+  return (STRINGS[lang] && STRINGS[lang][key] != null)
+    ? STRINGS[lang][key]
+    : STRINGS.en[key];
+}
+
+/* =========================================================================
+   Persistent settings (preferences only — never the board)
+   ====================================================================== */
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function saveSettings() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      lang: state.lang,
+      mode: state.mode,
+      difficulty: state.difficulty,
+      firstPlayer: state.firstPlayer,
+      colors: state.colors,
+    }));
+  } catch (e) { /* storage may be unavailable; ignore */ }
+}
+
+/* Pick an initial language from saved settings, else the browser locale, else
+   English. Only languages we actually ship can be selected. */
+function pickInitialLanguage(saved) {
+  const available = new Set(LANGUAGES.map(l => l.code));
+  if (saved.lang && available.has(saved.lang)) return saved.lang;
+  const nav = (navigator.language || "en").slice(0, 2).toLowerCase();
+  return available.has(nav) ? nav : "en";
+}
+
+/* =========================================================================
+   Runtime state
+   ====================================================================== */
+
+const saved = loadSettings();
+
+// Default colors: Player 1 red, Player 2 yellow, board blue.
+const DEFAULT_COLORS = { p1: "#e4453a", p2: "#f4c531", board: "#1e6fd6" };
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+function sanitizeColor(v, fallback) { return (typeof v === "string" && HEX_RE.test(v)) ? v.toLowerCase() : fallback; }
+
+const state = {
+  lang: pickInitialLanguage(saved),
+  mode: saved.mode === "2p" ? "2p" : "1p",          // "1p" | "2p"
+  difficulty: ["easy", "medium", "hard"].includes(saved.difficulty) ? saved.difficulty : "easy",
+  colors: {
+    p1: sanitizeColor(saved.colors && saved.colors.p1, DEFAULT_COLORS.p1),
+    p2: sanitizeColor(saved.colors && saved.colors.p2, DEFAULT_COLORS.p2),
+    board: sanitizeColor(saved.colors && saved.colors.board, DEFAULT_COLORS.board),
+  },
+  firstPlayer: saved.firstPlayer === YELLOW ? YELLOW : RED,  // who moves first
+  grid: makeEmptyGrid(),                             // grid[row][col]
+  current: RED,                                      // whose turn (set from firstPlayer)
+  busy: false,                                       // input locked during animation / AI
+  gameOver: false,
+  discEls: [],                                       // discEls[row][col] -> element (for win highlight)
+  history: [],                                       // stack of { row, col, player } for undo
+};
+
+// In 1-player mode the human is always RED (plays first); the computer is YELLOW.
+const HUMAN = RED;
+const AI = YELLOW;
+
+function makeEmptyGrid() {
+  return Array.from({ length: ROWS }, () => new Array(COLS).fill(EMPTY));
+}
+
+/* =========================================================================
+   DOM references
+   ====================================================================== */
+
+const els = {
+  langSelect: document.getElementById("lang-select"),
+  modeSeg: document.getElementById("mode-seg"),
+  diffSeg: document.getElementById("diff-seg"),
+  diffGroup: document.getElementById("difficulty-setting"),
+  firstSeg: document.getElementById("first-seg"),
+  newGame: document.getElementById("new-game"),
+  undoBtn: document.getElementById("undo-btn"),
+  playAgain: document.getElementById("play-again"),
+  settingsToggle: document.getElementById("settings-toggle"),
+  settingsPanel: document.getElementById("settings-panel"),
+  settingsBackdrop: document.getElementById("settings-backdrop"),
+  settingsClose: document.getElementById("settings-close"),
+  schemeRow: document.getElementById("scheme-row"),
+  colorRow: document.getElementById("color-row"),
+  colorP1: document.getElementById("color-p1"),
+  colorP2: document.getElementById("color-p2"),
+  colorBoard: document.getElementById("color-board"),
+  status: document.getElementById("status"),
+  boardWrap: document.getElementById("board-wrap"),
+  board: document.getElementById("board"),
+  tokensLayer: document.getElementById("tokens-layer"),
+  boardFace: document.getElementById("board-face"),
+  dropButtons: document.getElementById("drop-buttons"),
+  pileLeft: document.getElementById("pile-left"),
+  pileRight: document.getElementById("pile-right"),
+  pileLeftLabel: document.getElementById("pile-left-label"),
+  pileRightLabel: document.getElementById("pile-right-label"),
+  dragGhost: document.getElementById("drag-ghost"),
+  version: document.getElementById("version"),
+};
+
+/* =========================================================================
+   Board / grid helpers
+   ====================================================================== */
+
+// The lowest empty row in a column, or -1 if the column is full.
+function landingRow(grid, col) {
+  for (let r = ROWS - 1; r >= 0; r--) {
+    if (grid[r][col] === EMPTY) return r;
+  }
+  return -1;
+}
+
+function columnPlayable(grid, col) {
+  return grid[0][col] === EMPTY;
+}
+
+function boardFull(grid) {
+  for (let c = 0; c < COLS; c++) if (grid[0][c] === EMPTY) return false;
+  return true;
+}
+
+// Direction vectors for the four line orientations.
+const DIRS = [[0, 1], [1, 0], [1, 1], [1, -1]];
+
+// If the disc just placed at (row,col) completes a four-in-a-row, return the
+// list of winning cells; otherwise return null. Only lines through (row,col)
+// need checking, which keeps this cheap inside the search.
+function winningLineAt(grid, row, col) {
+  const p = grid[row][col];
+  if (p === EMPTY) return null;
+  for (const [dr, dc] of DIRS) {
+    const cells = [[row, col]];
+    // extend both directions
+    for (const sign of [1, -1]) {
+      let r = row + dr * sign, c = col + dc * sign;
+      while (r >= 0 && r < ROWS && c >= 0 && c < COLS && grid[r][c] === p) {
+        cells.push([r, c]);
+        r += dr * sign; c += dc * sign;
+      }
+    }
+    if (cells.length >= 4) return cells;
+  }
+  return null;
+}
+
+// Scan the whole board for any winner (used after a real move for highlight).
+function findWinner(grid) {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (grid[r][c] === EMPTY) continue;
+      const line = winningLineAt(grid, r, c);
+      if (line) return { player: grid[r][c], cells: line };
+    }
+  }
+  return null;
+}
+
+/* =========================================================================
+   Rendering
+   ====================================================================== */
+
+// Build the static board face (holes) and the quick-drop chevron buttons.
+function buildBoardChrome() {
+  els.boardFace.innerHTML = "";
+  for (let i = 0; i < ROWS * COLS; i++) {
+    const hole = document.createElement("div");
+    hole.className = "hole";
+    els.boardFace.appendChild(hole);
+  }
+
+  els.dropButtons.innerHTML = "";
+  for (let c = 0; c < COLS; c++) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.col = String(c);
+    b.setAttribute("aria-label", `${t("dropInColumn")} ${c + 1}`);
+    b.innerHTML =
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M6 9l6 6 6-6"/></svg>';
+    b.addEventListener("click", () => humanDrop(c));
+    els.dropButtons.appendChild(b);
+  }
+}
+
+// Return the hole element at (row, col) within the face grid.
+function holeAt(row, col) {
+  return els.boardFace.children[row * COLS + col];
+}
+
+// Render (or re-render) the piles. Each pile shows a loose heap of discs; the
+// top disc is the one that will be dragged. Positions use a fixed pseudo-random
+// jitter so the pile looks natural but stable.
+const PILE_JITTER = [
+  { x: -8, y: 2, rot: -6 },
+  { x: 7, y: 6, rot: 5 },
+  { x: -3, y: 14, rot: 2 },
+  { x: 6, y: 20, rot: -4 },
+  { x: -6, y: 26, rot: 7 },
+];
+
+function renderPile(pileEl, player) {
+  // Remove existing discs (keep the label span).
+  [...pileEl.querySelectorAll(".pile-disc")].forEach(e => e.remove());
+  const discClass = player === RED ? "disc-red" : "disc-yellow";
+  PILE_JITTER.forEach((j, i) => {
+    const d = document.createElement("div");
+    d.className = "pile-disc " + discClass;
+    d.style.bottom = j.y + "px";
+    d.style.transform = `translateX(-50%) translateX(${j.x}px) rotate(${j.rot}deg)`;
+    d.style.zIndex = String(i + 1);
+    pileEl.appendChild(d);
+  });
+}
+
+// Update which pile is "active" (highlighted + draggable) based on whose turn
+// it is and whether that player is human.
+function updatePiles() {
+  const leftActive = state.current === RED && !state.gameOver;
+  const rightActive = state.current === YELLOW && !state.gameOver;
+
+  const leftHumanDraggable = leftActive && !state.busy && isHumanTurn();
+  const rightHumanDraggable = rightActive && !state.busy && isHumanTurn();
+
+  els.pileLeft.classList.toggle("active", leftActive);
+  els.pileRight.classList.toggle("active", rightActive);
+  els.pileLeft.classList.toggle("drag-ready", leftHumanDraggable);
+  els.pileRight.classList.toggle("drag-ready", rightHumanDraggable);
+
+  // Labels: names depend on mode.
+  if (state.mode === "1p") {
+    els.pileLeftLabel.textContent = t("you");
+    els.pileRightLabel.textContent = t("computer");
+  } else {
+    els.pileLeftLabel.textContent = t("player1");
+    els.pileRightLabel.textContent = t("player2");
+  }
+}
+
+// True when the player to move is a human (always true in 2p; only RED in 1p).
+function isHumanTurn() {
+  return state.mode === "2p" || state.current === HUMAN;
+}
+
+/* =========================================================================
+   Turn / status UI
+   ====================================================================== */
+
+function updateStatus() {
+  const s = els.status;
+  s.innerHTML = "";
+
+  const addChip = (cls) => {
+    const c = document.createElement("span");
+    c.className = "chip " + cls;
+    s.appendChild(c);
+  };
+  const addText = (txt) => {
+    const span = document.createElement("span");
+    span.textContent = txt;
+    s.appendChild(span);
+  };
+
+  if (state.gameOver) {
+    // Winner text is set directly by endGame(); leave as-is.
+    return;
+  }
+
+  const colorClass = state.current === RED ? "red" : "yellow";
+  addChip(colorClass);
+
+  if (state.mode === "1p") {
+    addText(state.current === HUMAN ? t("yourTurn") : t("computerThinking"));
+  } else {
+    addText(state.current === RED ? t("player1Turn") : t("player2Turn"));
+  }
+}
+
+// Lock or unlock all input affordances (chevrons + drag) during animation/AI.
+function setInteractive(interactive) {
+  els.boardWrap.classList.toggle("locked", !interactive);
+  const canTapColumn = (c) => interactive && isHumanTurn() && columnPlayable(state.grid, c);
+  [...els.dropButtons.children].forEach((btn, c) => {
+    btn.disabled = !canTapColumn(c);
+  });
+  updatePiles();
+  updateUndoButton();
+}
+
+/* =========================================================================
+   Move flow
+   ====================================================================== */
+
+// Entry point for a human-initiated drop (chevron tap or drag release).
+function humanDrop(col) {
+  if (state.busy || state.gameOver) return;
+  if (!isHumanTurn()) return;
+  if (!columnPlayable(state.grid, col)) return;
+  performMove(col, state.current);
+}
+
+// Apply a move for `player` in `col`: update the grid, animate the disc, then
+// resolve the outcome (win / draw / next turn / AI reply).
+function performMove(col, player) {
+  const row = landingRow(state.grid, col);
+  if (row < 0) return;
+  state.grid[row][col] = player;
+  state.history.push({ row, col, player });
+  state.busy = true;
+  setInteractive(false);
+  clearColumnHints();
+
+  animateDrop(row, col, player, () => {
+    // Win?
+    const line = winningLineAt(state.grid, row, col);
+    if (line) {
+      endGame(player, line);
+      return;
+    }
+    // Draw?
+    if (boardFull(state.grid)) {
+      endGame(null, null);
+      return;
+    }
+    // Next player.
+    state.current = player === RED ? YELLOW : RED;
+    updateStatus();
+
+    if (state.mode === "1p" && state.current === AI) {
+      // Keep input locked; let the computer reply after a short beat so the
+      // "thinking" status is visible.
+      setInteractive(false);
+      updatePiles();
+      setTimeout(runAiTurn, 380);
+    } else {
+      state.busy = false;
+      setInteractive(true);
+    }
+  });
+}
+
+function runAiTurn() {
+  const col = chooseAiMove(state.grid, AI, HUMAN, state.difficulty);
+  // Fallback safety: if somehow invalid, pick any playable column.
+  let targetCol = col;
+  if (targetCol == null || !columnPlayable(state.grid, targetCol)) {
+    targetCol = firstPlayableColumn(state.grid);
+  }
+  performMove(targetCol, AI);
+}
+
+function firstPlayableColumn(grid) {
+  for (let c = 0; c < COLS; c++) if (columnPlayable(grid, c)) return c;
+  return 0;
+}
+
+// Animate a disc falling into (row, col). The disc starts one cell above the
+// top edge (hidden behind the face) and transitions down into its hole.
+function animateDrop(row, col, player, done) {
+  const cell = els.board.clientWidth / COLS;   // current pixel size of a cell
+  const disc = document.createElement("div");
+  disc.className = "disc " + (player === RED ? "disc-red" : "disc-yellow");
+  disc.style.gridRow = String(row + 1);
+  disc.style.gridColumn = String(col + 1);
+  els.tokensLayer.appendChild(disc);
+  state.discEls[row][col] = disc;
+
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // Start above the board.
+  disc.style.transform = `translateY(${-(row + 1) * cell}px)`;
+  // Force reflow so the starting transform is committed before transitioning.
+  void disc.getBoundingClientRect();
+
+  const dur = reduceMotion ? 0 : 130 + row * 70;
+  disc.style.transition = `transform ${dur}ms cubic-bezier(.46,.03,.62,1)`;
+
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    disc.style.transition = "";
+    disc.style.transform = "";
+    disc.classList.add("seat");
+    disc.addEventListener("animationend", () => disc.classList.remove("seat"), { once: true });
+    done();
+  };
+
+  requestAnimationFrame(() => { disc.style.transform = "translateY(0)"; });
+  disc.addEventListener("transitionend", finish, { once: true });
+  // Fallback in case transitionend doesn't fire.
+  setTimeout(finish, dur + 140);
+}
+
+function endGame(winner, line) {
+  state.gameOver = true;
+  state.busy = false;
+  setInteractive(false);
+  clearColumnHints();
+
+  if (line) {
+    for (const [r, c] of line) {
+      const el = state.discEls[r][c];
+      if (el) el.classList.add("win");
+    }
+  }
+
+  // Compose the end-of-game status line.
+  els.status.innerHTML = "";
+  const addChip = (cls) => {
+    const c = document.createElement("span");
+    c.className = "chip " + cls;
+    els.status.appendChild(c);
+  };
+  const addText = (txt) => {
+    const span = document.createElement("span");
+    span.textContent = txt;
+    els.status.appendChild(span);
+  };
+
+  if (winner == null) {
+    addText(t("draw"));
+  } else {
+    const cls = winner === RED ? "red" : "yellow";
+    addChip(cls);
+    if (state.mode === "1p") {
+      addText(winner === HUMAN ? t("youWin") : t("computerWins"));
+    } else {
+      addText(winner === RED ? t("player1Wins") : t("player2Wins"));
+    }
+  }
+
+  // Place the New Game button alongside the result text on the same row.
+  els.status.appendChild(els.playAgain);
+  els.playAgain.hidden = false;
+  updatePiles();
+}
+
+/* =========================================================================
+   Undo
+   -------------------------------------------------------------------------
+   Takes back the last move. In 2-player mode that is a single move. In
+   1-player mode the computer replies automatically after the human, so undo
+   removes both the computer's reply and the human's move, returning play to
+   the human's turn. Also unwinds a finished game (clears the win highlight
+   and the end-of-game "New Game" button).
+   ====================================================================== */
+
+// True when there is something to take back and we're not mid-animation/AI.
+function canUndo() {
+  return !state.busy && state.history.length > 0;
+}
+
+function undoMove() {
+  if (!canUndo()) return;
+
+  // How many moves to pop. In 1-player mode, if the last move was the
+  // computer's, also remove the human move before it so it's the human's turn.
+  let count = 1;
+  if (state.mode === "1p") {
+    const last = state.history[state.history.length - 1];
+    if (last.player === AI && state.history.length >= 2) count = 2;
+  }
+
+  let lastPopped = null;
+  for (let i = 0; i < count; i++) {
+    const move = state.history.pop();
+    if (!move) break;
+    lastPopped = move;
+    state.grid[move.row][move.col] = EMPTY;
+    const el = state.discEls[move.row][move.col];
+    if (el) el.remove();
+    state.discEls[move.row][move.col] = null;
+  }
+
+  // Any leftover win highlight (from cells that weren't undone) must be cleared.
+  els.tokensLayer.querySelectorAll(".disc.win").forEach(d => d.classList.remove("win"));
+
+  // Resume play: it is the turn of whoever made the earliest move we took back
+  // (or the configured first player if the board is now empty).
+  state.gameOver = false;
+  state.busy = false;
+  state.current = lastPopped ? lastPopped.player : state.firstPlayer;
+  els.playAgain.hidden = true;
+
+  updateStatus();
+  updatePiles();
+
+  // If undo emptied the board back to a computer-first opening, let the
+  // computer play again rather than leaving its turn with no trigger.
+  if (state.mode === "1p" && state.current === AI) {
+    setInteractive(false);
+    state.busy = true;
+    setTimeout(runAiTurn, 380);
+  } else {
+    setInteractive(true);
+  }
+}
+
+// Enable the sidebar Undo button only when a move can be taken back.
+function updateUndoButton() {
+  els.undoBtn.disabled = !canUndo();
+}
+
+/* =========================================================================
+   New game
+   ====================================================================== */
+
+function newGame() {
+  state.grid = makeEmptyGrid();
+  state.discEls = Array.from({ length: ROWS }, () => new Array(COLS).fill(null));
+  state.history = [];
+  state.current = state.firstPlayer;
+  state.busy = false;
+  state.gameOver = false;
+  els.playAgain.hidden = true;
+
+  els.tokensLayer.innerHTML = "";
+  buildBoardChrome();
+  renderPile(els.pileLeft, RED);
+  renderPile(els.pileRight, YELLOW);
+
+  updateStatus();
+  updatePiles();
+
+  // If the computer moves first, keep input locked and let it open the game.
+  if (state.mode === "1p" && state.current === AI) {
+    setInteractive(false);
+    state.busy = true;
+    setTimeout(runAiTurn, 380);
+  } else {
+    setInteractive(true);
+  }
+}
+
+/* =========================================================================
+   Computer opponent
+   -------------------------------------------------------------------------
+   Three strengths:
+     easy   — plays randomly, BUT always takes an immediate win and always
+              blocks the opponent's immediate win.
+     medium — negamax search with alpha-beta pruning to a moderate depth.
+     hard   — the same search, much deeper, so it plays near-perfectly.
+   All three are guaranteed to win-now / block-now because the search (and the
+   easy tactical check) detect one-move threats.
+   ====================================================================== */
+
+const AI_DEPTH = { medium: 5, hard: 9 };
+const WIN_SCORE = 1e7;
+
+function chooseAiMove(grid, me, opp, difficulty) {
+  if (difficulty === "easy") return chooseEasyMove(grid, me, opp);
+  return chooseSearchMove(grid, me, opp, AI_DEPTH[difficulty] || 5);
+}
+
+// Easy: win if you can, block if you must, otherwise random.
+function chooseEasyMove(grid, me, opp) {
+  const moves = playableColumns(grid);
+
+  // 1) Immediate win.
+  for (const c of moves) {
+    const r = landingRow(grid, c);
+    grid[r][c] = me;
+    const win = winningLineAt(grid, r, c);
+    grid[r][c] = EMPTY;
+    if (win) return c;
+  }
+  // 2) Block opponent's immediate win.
+  for (const c of moves) {
+    const r = landingRow(grid, c);
+    grid[r][c] = opp;
+    const win = winningLineAt(grid, r, c);
+    grid[r][c] = EMPTY;
+    if (win) return c;
+  }
+  // 3) Random.
+  return moves[Math.floor(Math.random() * moves.length)];
+}
+
+// Search-based move selection (medium / hard). Root does its own alpha-beta
+// loop so it can return the actual column, with a light randomization among
+// equally-best moves to avoid identical games.
+function chooseSearchMove(grid, me, opp, depth) {
+  const order = orderedColumns(grid);
+  let bestScore = -Infinity;
+  let bestCols = [];
+  let alpha = -Infinity;
+  const beta = Infinity;
+
+  for (const c of order) {
+    const r = landingRow(grid, c);
+    grid[r][c] = me;
+    let score;
+    const win = winningLineAt(grid, r, c);
+    if (win) {
+      score = WIN_SCORE; // winning immediately is best
+    } else if (boardFull(grid)) {
+      score = 0;
+    } else {
+      score = -negamax(grid, depth - 1, -beta, -alpha, opp, me);
+    }
+    grid[r][c] = EMPTY;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestCols = [c];
+    } else if (score === bestScore) {
+      bestCols.push(c);
+    }
+    if (bestScore > alpha) alpha = bestScore;
+  }
+  return bestCols[Math.floor(Math.random() * bestCols.length)];
+}
+
+// Negamax with alpha-beta. Returns the value of `grid` from the perspective of
+// `toMove`. `me` is the AI (used only to orient the heuristic consistently).
+function negamax(grid, depth, alpha, beta, toMove, other) {
+  const moves = orderedColumns(grid);
+  if (moves.length === 0) return 0; // board full -> draw
+
+  // If any move wins immediately for the side to move, take it. This both
+  // resolves terminal nodes and prunes aggressively. Prefer faster wins by
+  // discounting for remaining depth.
+  for (const c of moves) {
+    const r = landingRow(grid, c);
+    grid[r][c] = toMove;
+    const win = winningLineAt(grid, r, c);
+    grid[r][c] = EMPTY;
+    if (win) return WIN_SCORE - (AI_DEPTH.hard - depth);
+  }
+
+  if (depth === 0) return heuristic(grid, toMove, other);
+
+  let best = -Infinity;
+  for (const c of moves) {
+    const r = landingRow(grid, c);
+    grid[r][c] = toMove;
+    const val = -negamax(grid, depth - 1, -beta, -alpha, other, toMove);
+    grid[r][c] = EMPTY;
+    if (val > best) best = val;
+    if (best > alpha) alpha = best;
+    if (alpha >= beta) break; // cutoff
+  }
+  return best;
+}
+
+// Playable columns in natural order.
+function playableColumns(grid) {
+  const out = [];
+  for (let c = 0; c < COLS; c++) if (columnPlayable(grid, c)) out.push(c);
+  return out;
+}
+
+// Playable columns ordered center-out; strong ordering makes alpha-beta prune
+// far more effectively.
+const CENTER_ORDER = [3, 2, 4, 1, 5, 0, 6];
+function orderedColumns(grid) {
+  const out = [];
+  for (const c of CENTER_ORDER) if (columnPlayable(grid, c)) out.push(c);
+  return out;
+}
+
+// Static evaluation from `toMove`'s perspective: score all length-4 windows,
+// rewarding our partial lines and penalizing the opponent's, plus a small
+// bonus for central control.
+function heuristic(grid, toMove, other) {
+  let score = 0;
+
+  // Center column control.
+  for (let r = 0; r < ROWS; r++) {
+    if (grid[r][3] === toMove) score += 3;
+    else if (grid[r][3] === other) score -= 3;
+  }
+
+  const scoreWindow = (a, b, c, d) => {
+    let mine = 0, theirs = 0, empty = 0;
+    for (const v of [a, b, c, d]) {
+      if (v === toMove) mine++;
+      else if (v === other) theirs++;
+      else empty++;
+    }
+    if (mine === 4) return 1000;
+    if (theirs === 4) return -1000;
+    let s = 0;
+    if (mine === 3 && empty === 1) s += 40;
+    else if (mine === 2 && empty === 2) s += 8;
+    if (theirs === 3 && empty === 1) s -= 55;   // weight blocking a bit heavier
+    else if (theirs === 2 && empty === 2) s -= 8;
+    return s;
+  };
+
+  // Horizontal windows.
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c <= COLS - 4; c++)
+      score += scoreWindow(grid[r][c], grid[r][c+1], grid[r][c+2], grid[r][c+3]);
+  // Vertical windows.
+  for (let c = 0; c < COLS; c++)
+    for (let r = 0; r <= ROWS - 4; r++)
+      score += scoreWindow(grid[r][c], grid[r+1][c], grid[r+2][c], grid[r+3][c]);
+  // Diagonal down-right.
+  for (let r = 0; r <= ROWS - 4; r++)
+    for (let c = 0; c <= COLS - 4; c++)
+      score += scoreWindow(grid[r][c], grid[r+1][c+1], grid[r+2][c+2], grid[r+3][c+3]);
+  // Diagonal up-right.
+  for (let r = 3; r < ROWS; r++)
+    for (let c = 0; c <= COLS - 4; c++)
+      score += scoreWindow(grid[r][c], grid[r-1][c+1], grid[r-2][c+2], grid[r-3][c+3]);
+
+  return score;
+}
+
+/* =========================================================================
+   Column hints (highlighting a target column during hover / drag)
+   ====================================================================== */
+
+function clearColumnHints() {
+  els.boardFace.querySelectorAll(".hole.col-hint").forEach(h => h.classList.remove("col-hint"));
+  els.dropButtons.querySelectorAll("button.hint").forEach(b => b.classList.remove("hint"));
+}
+
+function hintColumn(col) {
+  clearColumnHints();
+  if (col == null) return;
+  for (let r = 0; r < ROWS; r++) holeAt(r, col).classList.add("col-hint");
+  const btn = els.dropButtons.children[col];
+  if (btn) btn.classList.add("hint");
+}
+
+// Convert a client X coordinate to a column index over the board, or null if
+// outside the board's horizontal span.
+function columnFromClientX(clientX) {
+  const rect = els.board.getBoundingClientRect();
+  if (clientX < rect.left || clientX > rect.right) return null;
+  const col = Math.floor((clientX - rect.left) / (rect.width / COLS));
+  return Math.max(0, Math.min(COLS - 1, col));
+}
+
+/* =========================================================================
+   Drag-and-drop of discs from a pile
+   ====================================================================== */
+
+let drag = null; // { player, ghost } while a drag is in progress
+
+function onPilePointerDown(e) {
+  const pileEl = e.currentTarget;
+  const player = Number(pileEl.dataset.player);
+
+  // Only the active human player's pile can be dragged.
+  if (state.busy || state.gameOver) return;
+  if (player !== state.current) return;
+  if (!isHumanTurn()) return;
+
+  e.preventDefault();
+
+  const cell = els.board.clientWidth / COLS;
+  const ghost = els.dragGhost;
+  ghost.className = player === RED ? "disc-red" : "disc-yellow";
+  ghost.style.width = cell + "px";
+  ghost.style.height = cell + "px";
+  ghost.style.display = "block";
+
+  drag = { player, ghost };
+  moveGhost(e.clientX, e.clientY);
+
+  window.addEventListener("pointermove", onDragMove);
+  window.addEventListener("pointerup", onDragEnd);
+  window.addEventListener("pointercancel", onDragEnd);
+}
+
+function moveGhost(x, y) {
+  drag.ghost.style.left = x + "px";
+  drag.ghost.style.top = y + "px";
+}
+
+function onDragMove(e) {
+  if (!drag) return;
+  moveGhost(e.clientX, e.clientY);
+  const rect = els.board.getBoundingClientRect();
+  // Only hint when the pointer is roughly over/above the board.
+  if (e.clientY <= rect.bottom && e.clientX >= rect.left - 40 && e.clientX <= rect.right + 40) {
+    const col = columnFromClientX(e.clientX);
+    hintColumn(col != null && columnPlayable(state.grid, col) ? col : null);
+  } else {
+    clearColumnHints();
+  }
+}
+
+function onDragEnd(e) {
+  if (!drag) return;
+  const ghost = drag.ghost;
+  const player = drag.player;
+  ghost.style.display = "none";
+  window.removeEventListener("pointermove", onDragMove);
+  window.removeEventListener("pointerup", onDragEnd);
+  window.removeEventListener("pointercancel", onDragEnd);
+  drag = null;
+
+  clearColumnHints();
+
+  const rect = els.board.getBoundingClientRect();
+  const overBoard = e.clientY <= rect.bottom && e.clientX >= rect.left - 40 && e.clientX <= rect.right + 40;
+  if (!overBoard) return;
+
+  const col = columnFromClientX(e.clientX);
+  if (col != null && player === state.current && columnPlayable(state.grid, col)) {
+    humanDrop(col);
+  }
+}
+
+/* =========================================================================
+   Chevron hover hints (desktop nicety)
+   ====================================================================== */
+
+function onColumnHover(col) {
+  if (state.busy || state.gameOver || !isHumanTurn()) return;
+  if (!columnPlayable(state.grid, col)) return;
+  hintColumn(col);
+}
+
+/* =========================================================================
+   Language dropdown
+   ====================================================================== */
+
+function buildLanguageDropdown() {
+  els.langSelect.innerHTML = "";
+  for (const lang of LANGUAGES) {
+    const opt = document.createElement("option");
+    opt.value = lang.code;
+    opt.textContent = `${lang.flag} ${lang.name}`;
+    els.langSelect.appendChild(opt);
+  }
+  els.langSelect.value = state.lang;
+  els.langSelect.addEventListener("change", () => {
+    state.lang = els.langSelect.value;
+    applyLanguage();
+    saveSettings();
+  });
+}
+
+// Apply translated strings to all [data-i18n] elements and dynamic labels.
+function applyLanguage() {
+  document.documentElement.lang = state.lang;
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    const key = el.getAttribute("data-i18n");
+    const val = STRINGS[state.lang] && STRINGS[state.lang][key];
+    if (val != null) el.textContent = val;
+  });
+  // Rebuild bits whose text depends on language.
+  [...els.dropButtons.children].forEach((btn, c) => {
+    btn.setAttribute("aria-label", `${t("dropInColumn")} ${c + 1}`);
+  });
+  updateFirstPlayerLabels();
+  if (!state.gameOver) updateStatus();
+  updatePiles();
+}
+
+// The "Goes First" buttons read "You / Computer" in 1-player mode and
+// "Player 1 / Player 2" in 2-player mode. The red button is always the first
+// party, the yellow button the second.
+function updateFirstPlayerLabels() {
+  const [redBtn, yellowBtn] = els.firstSeg.children;
+  if (state.mode === "1p") {
+    redBtn.textContent = t("you");
+    yellowBtn.textContent = t("computer");
+  } else {
+    redBtn.textContent = t("player1");
+    yellowBtn.textContent = t("player2");
+  }
+}
+
+/* =========================================================================
+   Color settings
+   ====================================================================== */
+
+// Small hex color math for deriving a highlight (lighter) and edge (darker)
+// shade from a chosen base color, giving any color a pleasant 3D disc look.
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function rgbToHex(r, g, b) {
+  const c = v => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
+  return "#" + c(r) + c(g) + c(b);
+}
+function lighten(hex, amt) {
+  const [r, g, b] = hexToRgb(hex);
+  return rgbToHex(r + (255 - r) * amt, g + (255 - g) * amt, b + (255 - b) * amt);
+}
+function darken(hex, amt) {
+  const [r, g, b] = hexToRgb(hex);
+  return rgbToHex(r * (1 - amt), g * (1 - amt), b * (1 - amt));
+}
+
+// Six preset schemes: { p1, p2, board }. Clicking one applies all three colors
+// at once. The first (Classic) matches DEFAULT_COLORS.
+const COLOR_SCHEMES = [
+  { name: "Classic", p1: "#e4453a", p2: "#f4c531", board: "#1e6fd6" },
+  { name: "Ocean",   p1: "#ff6b6b", p2: "#ffe66d", board: "#0d5c8c" },
+  { name: "Forest",  p1: "#7b4a2e", p2: "#f2c14e", board: "#2f6b3c" },
+  { name: "Sunset",  p1: "#000000", p2: "#ffffff", board: "#ff0000" },
+  { name: "Berry",   p1: "#e84393", p2: "#55efc4", board: "#4834d4" },
+  { name: "Slate",   p1: "#ff0000", p2: "#0000ff", board: "#ffffff" },
+  { name: "White",   p1: "#ffffff", p2: "#ffffff", board: "#ffffff" },
+  { name: "Neon",    p1: "#39ff14", p2: "#00fff2", board: "#000000" },
+  { name: "Cocoa",   p1: "#c9a58a", p2: "#5c3b24", board: "#b5651d" },
+];
+
+// Build the clickable scheme tiles once, each previewing its two player discs
+// over its board color.
+function buildColorSchemes() {
+  els.schemeRow.innerHTML = "";
+  COLOR_SCHEMES.forEach((scheme) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "scheme-swatch";
+    btn.dataset.scheme = scheme.name;
+    btn.setAttribute("aria-label", scheme.name);
+    btn.style.background = scheme.board;
+    for (const key of ["p1", "p2"]) {
+      const disc = document.createElement("span");
+      disc.className = "disc";
+      disc.style.background = scheme[key];
+      btn.appendChild(disc);
+    }
+    btn.addEventListener("click", () => applyScheme(scheme));
+    els.schemeRow.appendChild(btn);
+  });
+}
+
+// Apply a preset: update state, pickers, CSS variables, and persist.
+function applyScheme(scheme) {
+  state.colors.p1 = scheme.p1;
+  state.colors.p2 = scheme.p2;
+  state.colors.board = scheme.board;
+  els.colorP1.value = scheme.p1;
+  els.colorP2.value = scheme.p2;
+  els.colorBoard.value = scheme.board;
+  applyColors();
+  saveSettings();
+}
+
+// Highlight the scheme tile matching the current colors (if any).
+function markActiveScheme() {
+  const { p1, p2, board } = state.colors;
+  [...els.schemeRow.children].forEach((btn) => {
+    const s = COLOR_SCHEMES.find(x => x.name === btn.dataset.scheme);
+    const active = s && s.p1 === p1 && s.p2 === p2 && s.board === board;
+    btn.setAttribute("aria-pressed", String(!!active));
+  });
+}
+
+// Push the chosen colors into CSS variables. Every disc, hole, chip and title
+// dot reads these variables, so this recolors the whole UI live.
+function applyColors() {
+  const root = document.documentElement.style;
+  const { p1, p2, board } = state.colors;
+  root.setProperty("--red", p1);
+  root.setProperty("--red-hi", lighten(p1, 0.4));
+  root.setProperty("--red-edge", darken(p1, 0.3));
+  root.setProperty("--yellow", p2);
+  root.setProperty("--yellow-hi", lighten(p2, 0.45));
+  root.setProperty("--yellow-edge", darken(p2, 0.3));
+  root.setProperty("--board", board);
+  root.setProperty("--board-edge", darken(board, 0.28));
+  markActiveScheme();
+}
+
+/* =========================================================================
+   Settings sidebar
+   ====================================================================== */
+
+function openSettings() {
+  els.settingsPanel.classList.add("open");
+  els.settingsBackdrop.classList.add("open");
+  els.settingsPanel.setAttribute("aria-hidden", "false");
+  els.settingsToggle.setAttribute("aria-expanded", "true");
+}
+function closeSettings() {
+  els.settingsPanel.classList.remove("open");
+  els.settingsBackdrop.classList.remove("open");
+  els.settingsPanel.setAttribute("aria-hidden", "true");
+  els.settingsToggle.setAttribute("aria-expanded", "false");
+}
+function settingsOpen() {
+  return els.settingsPanel.classList.contains("open");
+}
+
+/* =========================================================================
+   Control wiring
+   ====================================================================== */
+
+function wireControls() {
+  // Mode toggle.
+  els.modeSeg.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-mode]");
+    if (!btn) return;
+    const mode = btn.dataset.mode;
+    if (mode === state.mode) return;
+    state.mode = mode;
+    [...els.modeSeg.children].forEach(b =>
+      b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
+    els.diffGroup.hidden = (mode !== "1p");
+    updateFirstPlayerLabels();
+    saveSettings();
+    newGame();
+  });
+
+  // "Goes First" toggle: red = first party (You / Player 1), yellow = second.
+  els.firstSeg.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-first]");
+    if (!btn) return;
+    const first = btn.dataset.first === "yellow" ? YELLOW : RED;
+    if (first === state.firstPlayer) return;
+    state.firstPlayer = first;
+    [...els.firstSeg.children].forEach(b =>
+      b.setAttribute("aria-pressed", String(b.dataset.first === btn.dataset.first)));
+    saveSettings();
+    newGame();
+  });
+
+  // Difficulty toggle.
+  els.diffSeg.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-diff]");
+    if (!btn) return;
+    const diff = btn.dataset.diff;
+    state.difficulty = diff;
+    [...els.diffSeg.children].forEach(b =>
+      b.setAttribute("aria-pressed", String(b.dataset.diff === diff)));
+    saveSettings();
+    // Difficulty changes take effect next game; start fresh for clarity.
+    newGame();
+  });
+
+  // New Game starts fresh and closes the sidebar so the board is visible.
+  els.newGame.addEventListener("click", () => { newGame(); closeSettings(); });
+
+  // Undo takes back the last move (both moves in 1-player mode).
+  els.undoBtn.addEventListener("click", undoMove);
+
+  // The in-board "New Game" button shown when a game ends.
+  els.playAgain.addEventListener("click", newGame);
+
+  // Color pickers: recolor live and persist.
+  const wireColor = (input, key) => {
+    input.addEventListener("input", () => {
+      state.colors[key] = input.value;
+      applyColors();
+      saveSettings();
+    });
+  };
+  wireColor(els.colorP1, "p1");
+  wireColor(els.colorP2, "p2");
+  wireColor(els.colorBoard, "board");
+
+  // Swap buttons: exchange two adjacent colors, then refresh pickers/UI.
+  const pickerFor = { p1: els.colorP1, p2: els.colorP2, board: els.colorBoard };
+  els.colorRow.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-swap]");
+    if (!btn) return;
+    const [a, b] = btn.dataset.swap.split("-");
+    [state.colors[a], state.colors[b]] = [state.colors[b], state.colors[a]];
+    pickerFor[a].value = state.colors[a];
+    pickerFor[b].value = state.colors[b];
+    applyColors();
+    saveSettings();
+  });
+
+  // Settings sidebar open/close.
+  els.settingsToggle.addEventListener("click", openSettings);
+  els.settingsClose.addEventListener("click", closeSettings);
+  els.settingsBackdrop.addEventListener("click", closeSettings);
+
+  // Piles: drag source.
+  els.pileLeft.addEventListener("pointerdown", onPilePointerDown);
+  els.pileRight.addEventListener("pointerdown", onPilePointerDown);
+
+  // Chevron hover hints.
+  [...els.dropButtons.children].forEach((btn, c) => {
+    btn.addEventListener("pointerenter", () => onColumnHover(c));
+    btn.addEventListener("pointerleave", clearColumnHints);
+  });
+
+  // Keyboard: Escape closes settings; number keys 1-7 drop into the matching
+  // column for the human (ignored while the settings sidebar is open).
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && settingsOpen()) {
+      closeSettings();
+      return;
+    }
+    if (settingsOpen()) return;
+    if (e.key >= "1" && e.key <= "7") {
+      const col = Number(e.key) - 1;
+      humanDrop(col);
+    }
+  });
+}
+
+/* =========================================================================
+   Init
+   ====================================================================== */
+
+function init() {
+  els.version.textContent = "v" + VERSION;
+
+  // Reflect saved settings in the controls before first paint.
+  [...els.modeSeg.children].forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.mode === state.mode)));
+  [...els.diffSeg.children].forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.diff === state.difficulty)));
+  els.diffGroup.hidden = (state.mode !== "1p");
+  [...els.firstSeg.children].forEach(b =>
+    b.setAttribute("aria-pressed",
+      String((b.dataset.first === "yellow" ? YELLOW : RED) === state.firstPlayer)));
+
+  // Reflect saved colors in the pickers and apply them.
+  els.colorP1.value = state.colors.p1;
+  els.colorP2.value = state.colors.p2;
+  els.colorBoard.value = state.colors.board;
+  buildColorSchemes();
+  applyColors();
+
+  buildLanguageDropdown();
+  wireControls();
+  newGame();
+  applyLanguage();
+}
+
+init();
+</script>
+</body>
+</html>
