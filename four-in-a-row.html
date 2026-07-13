@@ -12,7 +12,10 @@
      shared as one document and will run fully offline.
 
      Design notes for developers:
-       * State is a plain 6x7 grid of 0 (empty) / 1 (red) / 2 (yellow).
+       * State is a ROWS x COLS grid of 0 (empty) / 1 (red) / 2 (yellow). The
+         width, height, and win length ("Goal Length") are configurable in
+         Settings; the CSS carries the classic 7x6 values as a fallback while
+         applyBoardConfig()/applyBoardDimensions() drive the live geometry.
        * The board is drawn as two stacked layers: a "tokens" grid behind a
          blue "face" whose circular holes let the discs show through. A disc
          is animated from above the top edge so it appears to fall into a hole.
@@ -64,6 +67,8 @@
   --yellow-hi: #ffe07a;
   --yellow-edge: #cc9a11;
   --focus: #1e6fd6;
+  /* Visual board-size multiplier, driven by the "Board Size" setting. */
+  --board-scale: 1;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -226,6 +231,91 @@ header #settings-toggle { flex: none; }
   font-weight: 700;
 }
 #difficulty-setting[hidden] { display: none; }
+
+/* Stepper: a [ − value + ] control used for the numeric board settings. */
+.stepper {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.stepper button {
+  appearance: none;
+  border: 0;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: 20px;
+  line-height: 1;
+  width: 46px;
+  flex: none;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.stepper button:hover:not(:disabled) { background: var(--bg); }
+.stepper button:active:not(:disabled) { transform: translateY(1px); }
+.stepper button:disabled { opacity: 0.35; cursor: default; }
+.stepper button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.stepper button:first-child { border-right: 1px solid var(--panel-border); }
+.stepper button:last-child { border-left: 1px solid var(--panel-border); }
+.stepper .value {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 600;
+  min-width: 0;
+  padding: 10px 4px;
+}
+
+/* Compact stepper used by the Board controls. Sized to content rather than
+   stretching, so several fit on one row. */
+.stepper.compact { flex: none; }
+.stepper.compact button { width: 32px; font-size: 18px; }
+.stepper.compact .value { flex: none; min-width: 34px; padding: 7px 4px; font-size: 14px; }
+
+/* Board settings block: a "Board" heading with a reset button, then two rows of
+   compact steppers (Goal + Size, then Width x Height). */
+.board-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.reset-btn {
+  appearance: none;
+  border: 1px solid var(--panel-border);
+  background: var(--panel);
+  color: var(--fg);
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+.reset-btn:hover { background: var(--bg); }
+.reset-btn:active { transform: translateY(1px); }
+.reset-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.board-controls { display: flex; flex-direction: column; gap: 12px; }
+.board-row { display: flex; align-items: center; gap: 10px; }
+.board-row.between { justify-content: space-between; }
+.board-row.center { justify-content: center; }
+.goal-group { display: flex; align-items: center; gap: 8px; }
+.mini-label {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.dims-x { font-size: 16px; font-weight: 700; color: var(--muted); }
 
 main {
   width: 100%;
@@ -510,7 +600,7 @@ main {
 
 .board-wrap {
   position: relative;
-  width: min(78vw, 460px);
+  width: calc(min(78vw, 460px) * var(--board-scale));
   flex: none;
   /* Reserve space at the top for the chevron drop-buttons so they sit above the
      board within this box rather than overflowing upward into the status text. */
@@ -644,7 +734,7 @@ main {
 /* Narrow screens: shrink the board and piles so the pile | board | pile row
    fits within the viewport without clipping the corner piles. */
 @media (max-width: 480px) {
-  .board-wrap { width: min(66vw, 460px); }
+  .board-wrap { width: calc(min(66vw, 460px) * var(--board-scale)); }
   .pile { width: clamp(40px, 13vw, 74px); }
   .pile .pile-disc { width: clamp(30px, 10vw, 54px); height: clamp(30px, 10vw, 54px); }
   .play-area { gap: 5px; }
@@ -736,6 +826,46 @@ main {
     </div>
 
     <div class="setting">
+      <div class="board-head">
+        <span class="label" data-i18n="board">Board</span>
+        <button type="button" id="board-reset" class="reset-btn"
+                aria-label="Reset board to defaults" title="Reset to defaults">&#x21BA;</button>
+      </div>
+      <div class="board-controls">
+        <!-- Goal length + overall size share one row. -->
+        <div class="board-row between">
+          <div class="goal-group">
+            <span class="mini-label" data-i18n="goal">Goal</span>
+            <div class="stepper compact" data-stepper="goalLength">
+              <button type="button" data-step="-1" aria-label="Decrease goal">&minus;</button>
+              <span class="value" id="goal-value"></span>
+              <button type="button" data-step="1" aria-label="Increase goal">+</button>
+            </div>
+          </div>
+          <div class="stepper compact" data-stepper="boardScale">
+            <button type="button" data-step="-1" aria-label="Decrease size">&minus;</button>
+            <span class="value" id="scale-value"></span>
+            <button type="button" data-step="1" aria-label="Increase size">+</button>
+          </div>
+        </div>
+        <!-- Width x Height: no labels, the x conveys "size". -->
+        <div class="board-row center">
+          <div class="stepper compact" data-stepper="width">
+            <button type="button" data-step="-1" aria-label="Decrease width">&minus;</button>
+            <span class="value" id="width-value"></span>
+            <button type="button" data-step="1" aria-label="Increase width">+</button>
+          </div>
+          <span class="dims-x" aria-hidden="true">&times;</span>
+          <div class="stepper compact" data-stepper="height">
+            <button type="button" data-step="-1" aria-label="Decrease height">&minus;</button>
+            <span class="value" id="height-value"></span>
+            <button type="button" data-step="1" aria-label="Increase height">+</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="setting">
       <span class="label" data-i18n="schemes">Color schemes</span>
       <div class="scheme-row" id="scheme-row" role="group" aria-label="Color schemes"></div>
     </div>
@@ -787,11 +917,32 @@ main {
    Configuration & constants
    ====================================================================== */
 
-const VERSION = "0.1.0";          // single source of truth for the version string
-const COLS = 7;
-const ROWS = 6;
+const VERSION = "0.2.0";          // single source of truth for the version string
+
+/* Board geometry is configurable at runtime (see the Board settings). These
+   start at the classic Connect-Four values but are reassigned by
+   applyBoardConfig() when the player changes the width / height / goal length.
+   They are `let` (not `const`) precisely so the whole game can be re-sized. */
+let COLS = 7;                     // board width  (number of columns)
+let ROWS = 6;                     // board height (number of rows)
+let WIN_LEN = 4;                  // "Goal Length": discs in a row needed to win
+
 const EMPTY = 0, RED = 1, YELLOW = 2;   // cell / player values
 const STORAGE_KEY = "fourinarow.settings.v1";
+
+/* Allowed ranges for the configurable board. The minimum width/height is the
+   goal length itself (an "N in a row" game needs at least an N x N board), so
+   the effective lower bound for a dimension is the goal length. Width and
+   height have no upper bound (maxDim: Infinity). */
+const BOARD_LIMITS = {
+  minGoal: 3, maxGoal: 8,        // discs-in-a-row goal
+  maxDim: Infinity,             // no upper cap on width or height
+  minScale: 0.1, maxScale: 5.0, // visual size multiplier (10% .. 500%)
+  scaleStep: 0.1,
+};
+
+// The classic Connect-Four board, restored by the Board settings' reset button.
+const DEFAULT_BOARD = { goalLength: 4, width: 7, height: 6, boardScale: 1 };
 
 /* -------------------------------------------------------------------------
    Internationalization scaffold.
@@ -822,6 +973,7 @@ const STRINGS = {
     goesFirst: "Goes First",
     schemes: "Color schemes",
     board: "Board",
+    goal: "Goal",
     credit: null, // rendered statically in markup (contains a link)
 
     // Pile labels
@@ -876,6 +1028,10 @@ function saveSettings() {
       difficulty: state.difficulty,
       firstPlayer: state.firstPlayer,
       colors: state.colors,
+      width: state.width,
+      height: state.height,
+      goalLength: state.goalLength,
+      boardScale: state.boardScale,
     }));
   } catch (e) { /* storage may be unavailable; ignore */ }
 }
@@ -900,6 +1056,33 @@ const DEFAULT_COLORS = { p1: "#e4453a", p2: "#f4c531", board: "#1e6fd6" };
 const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 function sanitizeColor(v, fallback) { return (typeof v === "string" && HEX_RE.test(v)) ? v.toLowerCase() : fallback; }
 
+// Clamp a saved value to an integer within [lo, hi], falling back to `dflt`.
+function clampInt(v, lo, hi, dflt) {
+  v = Math.round(Number(v));
+  if (!Number.isFinite(v)) return dflt;
+  return Math.max(lo, Math.min(hi, v));
+}
+// Clamp the board scale to one decimal within its allowed range.
+function clampScale(v) {
+  v = Number(v);
+  if (!Number.isFinite(v)) return 1;
+  const s = Math.round(v * 10) / 10;
+  return Math.max(BOARD_LIMITS.minScale, Math.min(BOARD_LIMITS.maxScale, s));
+}
+
+/* Resolve the saved board geometry. The goal length is clamped first; the
+   width and height are then clamped with the goal length as their lower bound
+   so an "N in a row" game always has at least an N x N board. */
+const savedGoal = clampInt(saved.goalLength, BOARD_LIMITS.minGoal, BOARD_LIMITS.maxGoal, 4);
+const savedWidth = Math.max(savedGoal, clampInt(saved.width, savedGoal, BOARD_LIMITS.maxDim, 7));
+const savedHeight = Math.max(savedGoal, clampInt(saved.height, savedGoal, BOARD_LIMITS.maxDim, 6));
+
+// Seed the live geometry globals now, before makeEmptyGrid() runs below, so the
+// initial grid is built at the saved size.
+COLS = savedWidth;
+ROWS = savedHeight;
+WIN_LEN = savedGoal;
+
 const state = {
   lang: pickInitialLanguage(saved),
   mode: saved.mode === "2p" ? "2p" : "1p",          // "1p" | "2p"
@@ -909,6 +1092,10 @@ const state = {
     p2: sanitizeColor(saved.colors && saved.colors.p2, DEFAULT_COLORS.p2),
     board: sanitizeColor(saved.colors && saved.colors.board, DEFAULT_COLORS.board),
   },
+  width: savedWidth,                                 // board columns
+  height: savedHeight,                               // board rows
+  goalLength: savedGoal,                             // discs-in-a-row to win
+  boardScale: clampScale(saved.boardScale),          // visual size multiplier
   firstPlayer: saved.firstPlayer === YELLOW ? YELLOW : RED,  // who moves first
   grid: makeEmptyGrid(),                             // grid[row][col]
   current: RED,                                      // whose turn (set from firstPlayer)
@@ -944,6 +1131,11 @@ const els = {
   settingsBackdrop: document.getElementById("settings-backdrop"),
   settingsClose: document.getElementById("settings-close"),
   schemeRow: document.getElementById("scheme-row"),
+  boardReset: document.getElementById("board-reset"),
+  goalValue: document.getElementById("goal-value"),
+  widthValue: document.getElementById("width-value"),
+  heightValue: document.getElementById("height-value"),
+  scaleValue: document.getElementById("scale-value"),
   colorRow: document.getElementById("color-row"),
   colorP1: document.getElementById("color-p1"),
   colorP2: document.getElementById("color-p2"),
@@ -986,9 +1178,9 @@ function boardFull(grid) {
 // Direction vectors for the four line orientations.
 const DIRS = [[0, 1], [1, 0], [1, 1], [1, -1]];
 
-// If the disc just placed at (row,col) completes a four-in-a-row, return the
-// list of winning cells; otherwise return null. Only lines through (row,col)
-// need checking, which keeps this cheap inside the search.
+// If the disc just placed at (row,col) completes a line of WIN_LEN in a row,
+// return the list of winning cells; otherwise return null. Only lines through
+// (row,col) need checking, which keeps this cheap inside the search.
 function winningLineAt(grid, row, col) {
   const p = grid[row][col];
   if (p === EMPTY) return null;
@@ -1002,7 +1194,7 @@ function winningLineAt(grid, row, col) {
         r += dr * sign; c += dc * sign;
       }
     }
-    if (cells.length >= 4) return cells;
+    if (cells.length >= WIN_LEN) return cells;
   }
   return null;
 }
@@ -1023,8 +1215,23 @@ function findWinner(grid) {
    Rendering
    ====================================================================== */
 
+// Push the current COLS x ROWS geometry into the CSS grids and the board's
+// aspect ratio so the two stacked layers and the chevron row all match. The
+// base stylesheet still carries the classic 7x6 values as a fallback.
+function applyBoardDimensions() {
+  const colTemplate = `repeat(${COLS}, 1fr)`;
+  const rowTemplate = `repeat(${ROWS}, 1fr)`;
+  els.tokensLayer.style.gridTemplateColumns = colTemplate;
+  els.tokensLayer.style.gridTemplateRows = rowTemplate;
+  els.boardFace.style.gridTemplateColumns = colTemplate;
+  els.boardFace.style.gridTemplateRows = rowTemplate;
+  els.dropButtons.style.gridTemplateColumns = colTemplate;
+  els.board.style.aspectRatio = `${COLS} / ${ROWS}`;
+}
+
 // Build the static board face (holes) and the quick-drop chevron buttons.
 function buildBoardChrome() {
+  applyBoardDimensions();
   els.boardFace.innerHTML = "";
   for (let i = 0; i < ROWS * COLS; i++) {
     const hole = document.createElement("div");
@@ -1367,6 +1574,104 @@ function updateUndoButton() {
 }
 
 /* =========================================================================
+   Board configuration (width / height / goal length / visual size)
+   ====================================================================== */
+
+// Copy the configurable geometry from state into the live globals used by the
+// game logic and AI. Call this before newGame() whenever a dimension changes.
+function applyBoardConfig() {
+  COLS = state.width;
+  ROWS = state.height;
+  WIN_LEN = state.goalLength;
+  CENTER_ORDER = buildCenterOrder(COLS);
+}
+
+// Apply the visual board-size multiplier. Purely cosmetic (no new game needed):
+// the board-wrap width is calc(base * --board-scale) in the stylesheet.
+function applyBoardScale() {
+  document.documentElement.style.setProperty("--board-scale", String(state.boardScale));
+}
+
+// Enable/disable a stepper's − and + buttons at the ends of its range.
+function setStepperDisabled(name, decDisabled, incDisabled) {
+  const wrap = document.querySelector(`[data-stepper="${name}"]`);
+  if (!wrap) return;
+  wrap.querySelector('[data-step="-1"]').disabled = decDisabled;
+  wrap.querySelector('[data-step="1"]').disabled = incDisabled;
+}
+
+// Refresh every board-setting stepper's displayed value and button limits.
+function updateStepperDisplays() {
+  const L = BOARD_LIMITS;
+  els.goalValue.textContent = String(state.goalLength);
+  els.widthValue.textContent = String(state.width);
+  els.heightValue.textContent = String(state.height);
+  els.scaleValue.textContent = Math.round(state.boardScale * 100) + "%";
+
+  // Goal length can't exceed maxGoal; width/height can't drop below the goal
+  // length (an N-in-a-row game needs at least an N x N board).
+  setStepperDisabled("goalLength", state.goalLength <= L.minGoal, state.goalLength >= L.maxGoal);
+  setStepperDisabled("width", state.width <= state.goalLength, state.width >= L.maxDim);
+  setStepperDisabled("height", state.height <= state.goalLength, state.height >= L.maxDim);
+  setStepperDisabled("boardScale",
+    state.boardScale <= L.minScale + 1e-9,
+    state.boardScale >= L.maxScale - 1e-9);
+}
+
+// Handle a ± click on one of the board steppers. Dimension/goal changes reshape
+// the board and start a fresh game; a size change only rescales the display.
+function changeBoardSetting(name, delta) {
+  const L = BOARD_LIMITS;
+
+  if (name === "boardScale") {
+    const next = clampScale(state.boardScale + delta * L.scaleStep);
+    if (next === state.boardScale) return;
+    state.boardScale = next;
+    applyBoardScale();
+    saveSettings();
+    updateStepperDisplays();
+    return;
+  }
+
+  if (name === "goalLength") {
+    const next = clampInt(state.goalLength + delta, L.minGoal, L.maxGoal, state.goalLength);
+    if (next === state.goalLength) return;
+    state.goalLength = next;
+    // Grow the board to keep it at least goal x goal.
+    if (state.width < next) state.width = next;
+    if (state.height < next) state.height = next;
+  } else if (name === "width") {
+    const next = clampInt(state.width + delta, state.goalLength, L.maxDim, state.width);
+    if (next === state.width) return;
+    state.width = next;
+  } else if (name === "height") {
+    const next = clampInt(state.height + delta, state.goalLength, L.maxDim, state.height);
+    if (next === state.height) return;
+    state.height = next;
+  } else {
+    return;
+  }
+
+  applyBoardConfig();
+  saveSettings();
+  updateStepperDisplays();
+  newGame();
+}
+
+// Restore the classic board (goal 4, 7x6, 100%) and start a fresh game.
+function resetBoardConfig() {
+  state.goalLength = DEFAULT_BOARD.goalLength;
+  state.width = DEFAULT_BOARD.width;
+  state.height = DEFAULT_BOARD.height;
+  state.boardScale = DEFAULT_BOARD.boardScale;
+  applyBoardConfig();
+  applyBoardScale();
+  saveSettings();
+  updateStepperDisplays();
+  newGame();
+}
+
+/* =========================================================================
    New game
    ====================================================================== */
 
@@ -1412,9 +1717,19 @@ function newGame() {
 const AI_DEPTH = { medium: 5, hard: 9 };
 const WIN_SCORE = 1e7;
 
+// The search cost grows like COLS^depth, so on wider boards we reduce the depth
+// to keep the computer responsive. This holds the node count roughly at what a
+// classic 7-wide board would cost, using log(7)/log(COLS) as the scale.
+function searchDepthFor(difficulty) {
+  const base = AI_DEPTH[difficulty] || 5;
+  if (COLS <= 7) return base;
+  const scaled = Math.round(base * Math.log(7) / Math.log(COLS));
+  return Math.max(3, scaled);
+}
+
 function chooseAiMove(grid, me, opp, difficulty) {
   if (difficulty === "easy") return chooseEasyMove(grid, me, opp);
-  return chooseSearchMove(grid, me, opp, AI_DEPTH[difficulty] || 5);
+  return chooseSearchMove(grid, me, opp, searchDepthFor(difficulty));
 }
 
 // Easy: win if you can, block if you must, otherwise random.
@@ -1516,8 +1831,12 @@ function playableColumns(grid) {
 }
 
 // Playable columns ordered center-out; strong ordering makes alpha-beta prune
-// far more effectively.
-const CENTER_ORDER = [3, 2, 4, 1, 5, 0, 6];
+// far more effectively. Rebuilt by applyBoardConfig() when the width changes.
+function buildCenterOrder(cols) {
+  const mid = (cols - 1) / 2;
+  return [...Array(cols).keys()].sort((a, b) => Math.abs(a - mid) - Math.abs(b - mid) || a - b);
+}
+let CENTER_ORDER = buildCenterOrder(COLS);
 function orderedColumns(grid) {
   const out = [];
   for (const c of CENTER_ORDER) if (columnPlayable(grid, c)) out.push(c);
@@ -1529,46 +1848,55 @@ function orderedColumns(grid) {
 // bonus for central control.
 function heuristic(grid, toMove, other) {
   let score = 0;
+  const W = WIN_LEN;
 
-  // Center column control.
+  // Center column control (the middle column of whatever width is in play).
+  const center = Math.floor(COLS / 2);
   for (let r = 0; r < ROWS; r++) {
-    if (grid[r][3] === toMove) score += 3;
-    else if (grid[r][3] === other) score -= 3;
+    if (grid[r][center] === toMove) score += 3;
+    else if (grid[r][center] === other) score -= 3;
   }
 
-  const scoreWindow = (a, b, c, d) => {
+  // Score one length-W window given how many cells are ours / theirs / empty.
+  const scoreWindow = (mine, theirs, empty) => {
+    if (mine === W) return 1000;
+    if (theirs === W) return -1000;
+    let s = 0;
+    if (mine === W - 1 && empty === 1) s += 40;
+    else if (mine === W - 2 && empty === 2) s += 8;
+    if (theirs === W - 1 && empty === 1) s -= 55;   // weight blocking a bit heavier
+    else if (theirs === W - 2 && empty === 2) s -= 8;
+    return s;
+  };
+
+  // Tally a window of W cells starting at (r,c) stepping by (dr,dc).
+  const windowAt = (r, c, dr, dc) => {
     let mine = 0, theirs = 0, empty = 0;
-    for (const v of [a, b, c, d]) {
+    for (let k = 0; k < W; k++) {
+      const v = grid[r + dr * k][c + dc * k];
       if (v === toMove) mine++;
       else if (v === other) theirs++;
       else empty++;
     }
-    if (mine === 4) return 1000;
-    if (theirs === 4) return -1000;
-    let s = 0;
-    if (mine === 3 && empty === 1) s += 40;
-    else if (mine === 2 && empty === 2) s += 8;
-    if (theirs === 3 && empty === 1) s -= 55;   // weight blocking a bit heavier
-    else if (theirs === 2 && empty === 2) s -= 8;
-    return s;
+    return scoreWindow(mine, theirs, empty);
   };
 
   // Horizontal windows.
   for (let r = 0; r < ROWS; r++)
-    for (let c = 0; c <= COLS - 4; c++)
-      score += scoreWindow(grid[r][c], grid[r][c+1], grid[r][c+2], grid[r][c+3]);
+    for (let c = 0; c <= COLS - W; c++)
+      score += windowAt(r, c, 0, 1);
   // Vertical windows.
   for (let c = 0; c < COLS; c++)
-    for (let r = 0; r <= ROWS - 4; r++)
-      score += scoreWindow(grid[r][c], grid[r+1][c], grid[r+2][c], grid[r+3][c]);
+    for (let r = 0; r <= ROWS - W; r++)
+      score += windowAt(r, c, 1, 0);
   // Diagonal down-right.
-  for (let r = 0; r <= ROWS - 4; r++)
-    for (let c = 0; c <= COLS - 4; c++)
-      score += scoreWindow(grid[r][c], grid[r+1][c+1], grid[r+2][c+2], grid[r+3][c+3]);
-  // Diagonal up-right.
-  for (let r = 3; r < ROWS; r++)
-    for (let c = 0; c <= COLS - 4; c++)
-      score += scoreWindow(grid[r][c], grid[r-1][c+1], grid[r-2][c+2], grid[r-3][c+3]);
+  for (let r = 0; r <= ROWS - W; r++)
+    for (let c = 0; c <= COLS - W; c++)
+      score += windowAt(r, c, 1, 1);
+  // Diagonal up-right (start from the bottom-left corner of each window).
+  for (let r = W - 1; r < ROWS; r++)
+    for (let c = 0; c <= COLS - W; c++)
+      score += windowAt(r, c, -1, 1);
 
   return score;
 }
@@ -1929,6 +2257,18 @@ function wireControls() {
     saveSettings();
   });
 
+  // Board steppers (goal length, width, height, size).
+  document.querySelectorAll("[data-stepper]").forEach((wrap) => {
+    wrap.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-step]");
+      if (!btn || btn.disabled) return;
+      changeBoardSetting(wrap.dataset.stepper, Number(btn.dataset.step));
+    });
+  });
+
+  // Reset the board back to the classic defaults.
+  els.boardReset.addEventListener("click", resetBoardConfig);
+
   // Settings sidebar open/close.
   els.settingsToggle.addEventListener("click", openSettings);
   els.settingsClose.addEventListener("click", closeSettings);
@@ -1944,17 +2284,18 @@ function wireControls() {
     btn.addEventListener("pointerleave", clearColumnHints);
   });
 
-  // Keyboard: Escape closes settings; number keys 1-7 drop into the matching
-  // column for the human (ignored while the settings sidebar is open).
+  // Keyboard: Escape closes settings; number keys 1-9 drop into the matching
+  // column for the human (ignored while the settings sidebar is open, and only
+  // for columns that exist on the current board).
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && settingsOpen()) {
       closeSettings();
       return;
     }
     if (settingsOpen()) return;
-    if (e.key >= "1" && e.key <= "7") {
+    if (e.key >= "1" && e.key <= "9") {
       const col = Number(e.key) - 1;
-      humanDrop(col);
+      if (col < COLS) humanDrop(col);
     }
   });
 }
@@ -1982,6 +2323,11 @@ function init() {
   els.colorBoard.value = state.colors.board;
   buildColorSchemes();
   applyColors();
+
+  // Reflect saved board geometry / size in the live globals and the steppers.
+  applyBoardConfig();
+  applyBoardScale();
+  updateStepperDisplays();
 
   buildLanguageDropdown();
   wireControls();
